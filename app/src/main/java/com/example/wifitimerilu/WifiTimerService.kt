@@ -11,6 +11,10 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -268,10 +272,94 @@ class WifiTimerService : Service() {
         }
 
         try {
+            // Acquire wake lock to ensure scan completes (release after a short time)
+            if (::wakeLock.isInitialized && !wakeLock.isHeld) {
+                wakeLock.acquire(30000) // Hold for 30 seconds, enough to complete scan
+                Log.d(TAG, "Wake lock acquired for WiFi scan")
+            }
+
+            // Try to get current connection first before scanning
+            checkCurrentWifiConnection()
+
+            // Then do a scan
             val success = wifiManager.startScan()
             Log.d(TAG, "Scan initiated, success: $success")
+
+            // Schedule a wake lock release
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (::wakeLock.isInitialized && wakeLock.isHeld) {
+                    try {
+                        wakeLock.release()
+                        Log.d(TAG, "Wake lock released after scan")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error releasing wake lock", e)
+                    }
+                }
+            }, 10000L) // Release after 10 seconds
         } catch (e: Exception) {
             Log.e(TAG, "Error starting WiFi scan", e)
+        }
+    }
+
+    private fun checkCurrentWifiConnection() {
+        try {
+            val connectivityManager = applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val targetWifiName = preferences.getString("wifi_name", "") ?: ""
+
+            if (targetWifiName.isEmpty()) {
+                Log.d(TAG, "No target WiFi configured")
+                return
+            }
+
+            // Different approaches based on Android version
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // For Android 10+
+                val networks = connectivityManager.allNetworks
+                for (network in networks) {
+                    val capabilities = connectivityManager.getNetworkCapabilities(network)
+                    if (capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                        val wifiInfo = capabilities.transportInfo as? WifiInfo
+                        if (wifiInfo != null) {
+                            val ssid = wifiInfo.ssid.replace("\"", "") // Remove quotes
+                            Log.d(TAG, "Current WiFi SSID: $ssid")
+
+                            // Check if it matches our target
+                            if (ssid.equals(targetWifiName, ignoreCase = true)) {
+                                Log.d(TAG, "Connected to target network: $targetWifiName")
+                                if (!isTimerRunning) {
+                                    startTimer()
+                                }
+                                return
+                            }
+                        }
+                    }
+                }
+
+                // If we got here, we're not connected to the target
+                if (isTimerRunning) {
+                    stopTimer()
+                }
+            } else {
+                // For older Android versions
+                val wifiInfo = wifiManager.connectionInfo
+                if (wifiInfo != null) {
+                    val ssid = wifiInfo.ssid.replace("\"", "") // Remove quotes
+                    Log.d(TAG, "Current WiFi SSID: $ssid")
+
+                    // Check if it matches our target
+                    if (ssid.equals(targetWifiName, ignoreCase = true)) {
+                        Log.d(TAG, "Connected to target network: $targetWifiName")
+                        if (!isTimerRunning) {
+                            startTimer()
+                        }
+                        return
+                    } else if (isTimerRunning) {
+                        stopTimer()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking current WiFi connection", e)
         }
     }
 
@@ -308,12 +396,9 @@ class WifiTimerService : Service() {
                 Log.d(TAG, "Available networks: $networkNames")
             }
 
-            // Check if target network is available (case-insensitive for better matching)
-            val isTargetAvailable = scanResults.any {
-                it.SSID.equals(targetWifiName, ignoreCase = true)
-            }
-
-            Log.d(TAG, "Target network '$targetWifiName' available: $isTargetAvailable, Timer running: $isTimerRunning")
+            // Check if target network is available
+            val isTargetAvailable = scanResults.any { it.SSID == targetWifiName }
+            Log.d(TAG, "Target network available: $isTargetAvailable, Timer running: $isTimerRunning")
 
             // Start timer if target found and not already running
             if (isTargetAvailable && !isTimerRunning) {
@@ -325,9 +410,6 @@ class WifiTimerService : Service() {
                 Log.d(TAG, "STOPPING TIMER - network no longer available: $targetWifiName")
                 stopTimer()
             }
-
-            // Always send a broadcast with current state (for debugging)
-            broadcastTimerUpdate()
 
         } catch (e: Exception) {
             Log.e(TAG, "Error checking WiFi networks", e)
@@ -409,21 +491,18 @@ class WifiTimerService : Service() {
 
         sendBroadcast(intent)
 
-        // Send direct multiple broadcasts to ensure they are received
-        // Send direct multiple broadcasts to ensure they are received
-        for (i in 0..2) {
-            Handler(Looper.getMainLooper()).postDelayed({
-                val retryIntent = Intent("com.example.wifitimerilu.TIMER_UPDATE")
-                retryIntent.putExtra("connection_ended", true)
-                retryIntent.putExtra("connection_start_time", connectionStartTimeForLog)
-                retryIntent.putExtra("connection_end_time", endTimeMillis)
-                retryIntent.putExtra("connection_duration", sessionTimeMillis)
-                retryIntent.putExtra("is_running", false)
-                retryIntent.setPackage(applicationContext.packageName)
-                sendBroadcast(retryIntent)
-                Log.d(TAG, "Sent retry connection_ended broadcast #${i+1}")
-            }, 500L * (i + 1))  // Add 'L' to make it explicitly a Long
-        }
+        // Retry broadcast for connection end just like with start
+        Handler(Looper.getMainLooper()).postDelayed({
+            val retryIntent = Intent("com.example.wifitimerilu.TIMER_UPDATE")
+            retryIntent.putExtra("connection_ended", true)
+            retryIntent.putExtra("connection_start_time", connectionStartTimeForLog)
+            retryIntent.putExtra("connection_end_time", endTimeMillis)
+            retryIntent.putExtra("connection_duration", sessionTimeMillis)
+            retryIntent.putExtra("is_running", false)
+            retryIntent.setPackage(applicationContext.packageName)
+            sendBroadcast(retryIntent)
+            Log.d(TAG, "Sent retry connection_ended broadcast")
+        }, 1000)
 
         Log.d(TAG, "Timer stopped - broadcasting connection_ended=true with duration: ${sessionTimeMillis/1000} seconds")
     }

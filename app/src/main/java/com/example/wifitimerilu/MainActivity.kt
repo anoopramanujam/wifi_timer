@@ -19,6 +19,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -28,7 +29,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
-import android.widget.ScrollView
 import android.content.Context.RECEIVER_NOT_EXPORTED
 
 class MainActivity : AppCompatActivity() {
@@ -44,6 +44,8 @@ class MainActivity : AppCompatActivity() {
     // For tracking connection time
     private var connectionStartTime: Long = 0
     private var currentRowView: LinearLayout? = null
+
+    // Time format for logs using HH:mm:ss
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     // Add handler for active UI updates
@@ -59,6 +61,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "WifiTimerMain"
         private const val PERMISSION_REQUEST_CODE = 100
+        private const val BACKGROUND_LOCATION_REQUEST_CODE = 101
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -129,7 +132,6 @@ class MainActivity : AppCompatActivity() {
 
                         // Create a new row in the log
                         addNewConnectionToLog()
-
                     } else if (connectionEnded) {
                         // A connection has ended
                         Log.d(TAG, "Received connection_ended broadcast")
@@ -142,7 +144,7 @@ class MainActivity : AppCompatActivity() {
 
                         Log.d(TAG, "Connection details - start: $connectionStartTime, end: $connectionEndTime, duration: ${connectionDuration/1000}s")
 
-                        // Update the log entry - removed the 1-minute limitation
+                        // Update the log entry without duration limitation
                         updateConnectionEndTime(connectionEndTime)
                     } else {
                         // Regular update, just update the status
@@ -156,6 +158,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
     override fun onResume() {
         super.onResume()
 
@@ -172,9 +175,6 @@ class MainActivity : AppCompatActivity() {
 
         // Force an immediate update
         updateUIFromPreferences()
-
-        // Add a test entry to see if the log container is working
-        addTestLogEntry()
 
         // Check if log container is visible and has correct layout
         Log.d(TAG, "Log container is visible: ${logEntriesContainer.visibility == View.VISIBLE}")
@@ -378,6 +378,14 @@ class MainActivity : AppCompatActivity() {
             neededPermissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }
 
+        // Background location permission for Android 10 (Q) and above
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+                neededPermissions.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            }
+        }
+
         // Request permissions if needed
         if (neededPermissions.isNotEmpty()) {
             ActivityCompat.requestPermissions(
@@ -399,18 +407,81 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
         if (requestCode == PERMISSION_REQUEST_CODE) {
-            // Check if all permissions were granted
-            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                // All permissions granted, start service
-                startWifiTimerService()
+            val grantedPermissions = mutableListOf<String>()
+            val deniedPermissions = mutableListOf<String>()
+
+            for (i in permissions.indices) {
+                if (grantResults[i] == PackageManager.PERMISSION_GRANTED) {
+                    grantedPermissions.add(permissions[i])
+                } else {
+                    deniedPermissions.add(permissions[i])
+                }
+            }
+
+            // Check if all essential permissions were granted
+            val hasLocationPermission = grantedPermissions.contains(Manifest.permission.ACCESS_FINE_LOCATION) ||
+                    grantedPermissions.contains(Manifest.permission.ACCESS_COARSE_LOCATION)
+
+            if (hasLocationPermission) {
+                // For Android 10+, we need to request background location permission separately
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    if (!grantedPermissions.contains(Manifest.permission.ACCESS_BACKGROUND_LOCATION)) {
+                        requestBackgroundLocationPermission()
+                    } else {
+                        // All permissions granted, start service
+                        startWifiTimerService()
+                    }
+                } else {
+                    // For pre-Android 10, we can start service with just location permission
+                    startWifiTimerService()
+                }
             } else {
-                // Some permissions denied
+                // Essential permissions denied
                 Toast.makeText(
                     this,
                     "Location permission is required for WiFi scanning",
                     Toast.LENGTH_LONG
                 ).show()
             }
+        } else if (requestCode == BACKGROUND_LOCATION_REQUEST_CODE) {
+            // This is from the separate background location request
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                startWifiTimerService()
+            } else {
+                Toast.makeText(
+                    this,
+                    "Background location permission is needed for scanning WiFi in the background",
+                    Toast.LENGTH_LONG
+                ).show()
+                // We can still start the service, but it may not work well in the background
+                startWifiTimerService()
+            }
+        }
+    }
+
+    private fun requestBackgroundLocationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            AlertDialog.Builder(this)
+                .setTitle("Background Location Permission Needed")
+                .setMessage("This app needs background location permission to detect WiFi networks when the app is in the background. Please grant this permission to allow the app to work properly.")
+                .setPositiveButton("OK") { _, _ ->
+                    ActivityCompat.requestPermissions(
+                        this,
+                        arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+                        BACKGROUND_LOCATION_REQUEST_CODE
+                    )
+                }
+                .setNegativeButton("Cancel") { _, _ ->
+                    Toast.makeText(
+                        this,
+                        "App will have limited functionality without background location permission",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    // Start service anyway, but it may not work in background
+                    startWifiTimerService()
+                }
+                .create()
+                .show()
         }
     }
 
@@ -487,62 +558,6 @@ class MainActivity : AppCompatActivity() {
             logEntriesContainer.addView(row, 0) // Add at the top
             currentRowView = row
             Log.d(TAG, "New row added to log container with 'In' time: $startTimeStr")
-
-            // Debug info
-            Toast.makeText(this, "Added connection entry at $startTimeStr", Toast.LENGTH_SHORT).show()
-            Log.d(TAG, "Log container child count: ${logEntriesContainer.childCount}")
-        }
-    }
-
-    // Add test entry for debugging with proper column format
-    private fun addTestLogEntry() {
-        runOnUiThread {
-            val row = LinearLayout(this)
-            row.orientation = LinearLayout.HORIZONTAL
-            row.layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            row.setBackgroundColor(ContextCompat.getColor(this, R.color.teal_200))
-
-            // Current time for the test
-            val currentTime = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-
-            // In column
-            val inColumn = TextView(this)
-            inColumn.layoutParams = LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f
-            )
-            inColumn.text = currentTime
-            inColumn.gravity = Gravity.CENTER
-            inColumn.setPadding(8, 8, 8, 8)
-            row.addView(inColumn)
-
-            // Out column
-            val outColumn = TextView(this)
-            outColumn.layoutParams = LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f
-            )
-            outColumn.text = "TEST"
-            outColumn.gravity = Gravity.CENTER
-            outColumn.setPadding(8, 8, 8, 8)
-            row.addView(outColumn)
-
-            // Duration column
-            val durationColumn = TextView(this)
-            durationColumn.layoutParams = LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f
-            )
-            durationColumn.text = "TEST"
-            durationColumn.gravity = Gravity.CENTER
-            durationColumn.setPadding(8, 8, 8, 8)
-            row.addView(durationColumn)
-
-            // Add the row to the container
-            logEntriesContainer.addView(row, 0)
-
-            Log.d(TAG, "Added TEST entry to log container with proper columns")
-            Toast.makeText(this, "Added TEST entry", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -559,7 +574,7 @@ class MainActivity : AppCompatActivity() {
         // Calculate duration
         val durationMillis = connectionEndTime - connectionStartTime
 
-        // Format duration (HH:mm:ss) - removed the 1-minute limitation
+        // Format duration (HH:mm:ss)
         val hours = TimeUnit.MILLISECONDS.toHours(durationMillis)
         val minutes = TimeUnit.MILLISECONDS.toMinutes(durationMillis) % 60
         val seconds = TimeUnit.MILLISECONDS.toSeconds(durationMillis) % 60
@@ -583,13 +598,10 @@ class MainActivity : AppCompatActivity() {
                     durationStr
                 )
 
-                Toast.makeText(this, "Updated connection log with end time", Toast.LENGTH_SHORT).show()
-
                 // Set currentRowView to null to indicate this entry is complete
                 currentRowView = null
             } catch (e: Exception) {
                 Log.e(TAG, "Error updating log entry: ${e.message}", e)
-                Toast.makeText(this, "Error updating log: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -603,7 +615,7 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams.WRAP_CONTENT
         )
 
-        // Set background color for visibility during debugging
+        // Set background color for visibility
         row.setBackgroundColor(ContextCompat.getColor(this, R.color.purple_500))
 
         // "In" column
