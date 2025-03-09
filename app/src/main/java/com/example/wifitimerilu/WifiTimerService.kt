@@ -48,6 +48,14 @@ class WifiTimerService : Service() {
         }
     }
 
+    // Broadcast receiver for reset commands
+    private val resetReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.d(TAG, "Reset broadcast received")
+            resetTimer()
+        }
+    }
+
     // Timer runnable to update time
     private val timerRunnable = object : Runnable {
         override fun run() {
@@ -113,9 +121,21 @@ class WifiTimerService : Service() {
         // Clear any existing session time
         preferences.edit().putLong("current_session_time", 0).apply()
 
-        // Register for WiFi scan results
+        // Register for WiFi scan results - specify RECEIVER_NOT_EXPORTED
         val intentFilter = IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
-        registerReceiver(wifiScanReceiver, intentFilter)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(wifiScanReceiver, intentFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(wifiScanReceiver, intentFilter)
+        }
+
+        // Register for reset broadcasts - specify RECEIVER_NOT_EXPORTED
+        val resetIntentFilter = IntentFilter("com.example.wifitimerilu.TIMER_RESET")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(resetReceiver, resetIntentFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(resetReceiver, resetIntentFilter)
+        }
 
         // Acquire wake lock
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -132,8 +152,15 @@ class WifiTimerService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "Service onStartCommand")
+        Log.d(TAG, "Service onStartCommand, action: ${intent?.action}")
 
+        // Check for reset action first
+        if (intent?.action == "com.example.wifitimerilu.TIMER_RESET") {
+            Log.d(TAG, "RESET action received in service, calling resetTimer()")
+            resetTimer()
+        }
+
+        // Handle foreground service start if needed
         if (intent?.getBooleanExtra("START_AS_FOREGROUND", false) == true) {
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -176,9 +203,10 @@ class WifiTimerService : Service() {
             apply()
         }
 
-        // Unregister receiver
+        // Unregister receivers
         try {
             unregisterReceiver(wifiScanReceiver)
+            unregisterReceiver(resetReceiver)
         } catch (e: Exception) {
             Log.e(TAG, "Error unregistering receiver", e)
         }
@@ -276,6 +304,38 @@ class WifiTimerService : Service() {
         updateNotification("Timer stopped - Total: ${formatTime(totalTimeMillis)}")
 
         // Broadcast timer state change
+        broadcastTimerUpdate()
+    }
+
+    private fun resetTimer() {
+        // Stop the timer if it's running
+        if (isTimerRunning) {
+            timerHandler.removeCallbacks(timerRunnable)
+        }
+
+        // Reset all timing variables
+        startTimeMillis = System.currentTimeMillis() // Reset the start time to now
+        totalTimeMillis = 0
+
+        // Update shared preferences
+        preferences.edit().apply {
+            putLong("total_time", 0)
+            putLong("current_session_time", 0)
+            putBoolean("timer_reset", false) // Clear the reset flag
+            apply()
+        }
+
+        Log.d(TAG, "Timer reset in service")
+
+        // If timer was running, restart it
+        if (isTimerRunning) {
+            timerHandler.post(timerRunnable)
+        }
+
+        // Update notification
+        updateNotification("Timer reset to 00:00:00")
+
+        // Broadcast the update to ensure UI is refreshed
         broadcastTimerUpdate()
     }
 

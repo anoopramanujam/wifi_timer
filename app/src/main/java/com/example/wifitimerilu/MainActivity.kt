@@ -203,15 +203,43 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun resetTimer() {
-        // Reset timer to zero
+        Log.d(TAG, "Reset button pressed - sending reset command to service")
+
+        // First, update the UI immediately to show 00:00:00
+        timerTextView.text = "00:00:00"
+
+        // Reset timer to zero in preferences
         preferences.edit().apply {
             putLong("total_time", 0)
             putLong("current_session_time", 0)
+            putBoolean("timer_reset", true)
             apply()
         }
 
-        updateUIFromPreferences()
+        // Create a direct Intent for the service with the reset action
+        val intent = Intent(this, WifiTimerService::class.java)
+        intent.action = "com.example.wifitimerilu.TIMER_RESET"
+
+        // Try both sending a broadcast and a direct service command
+        try {
+            // Try to start service with the reset action
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+
+            // Also send broadcast as backup
+            sendBroadcast(intent)
+            Log.d(TAG, "Reset command sent to service")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending reset command: ${e.message}", e)
+        }
+
         Toast.makeText(this, "Timer reset to 00:00:00", Toast.LENGTH_SHORT).show()
+
+        // Force an immediate UI update
+        updateUIFromPreferences()
     }
 
     private fun updateStatus(status: String) {
