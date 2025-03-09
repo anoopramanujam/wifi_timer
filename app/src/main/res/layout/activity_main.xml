@@ -18,7 +18,7 @@
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        android:layout_marginTop="24dp"/>
+        android:layout_marginTop="16dp"/>
 
     <TextView
         android:id="@+id/instruction_textview"
@@ -29,7 +29,7 @@
         app:layout_constraintTop_toBottomOf="@id/title_textview"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        android:layout_marginTop="24dp"/>
+        android:layout_marginTop="16dp"/>
 
     <EditText
         android:id="@+id/wifi_name_edittext"
@@ -61,7 +61,7 @@
         android:textStyle="bold"
         app:layout_constraintTop_toBottomOf="@id/save_button"
         app:layout_constraintStart_toStartOf="parent"
-        android:layout_marginTop="24dp"/>
+        android:layout_marginTop="16dp"/>
 
     <TextView
         android:id="@+id/status_textview"
@@ -83,7 +83,7 @@
         android:textStyle="bold"
         app:layout_constraintTop_toBottomOf="@id/status_label"
         app:layout_constraintStart_toStartOf="parent"
-        android:layout_marginTop="24dp"/>
+        android:layout_marginTop="16dp"/>
 
     <TextView
         android:id="@+id/timer_textview"
@@ -110,7 +110,7 @@
         app:layout_constraintEnd_toEndOf="parent"
         android:layout_marginTop="16dp"/>
 
-    <!-- Connection Log Header -->
+    <!-- Connection Log Header with background -->
     <TextView
         android:id="@+id/log_header"
         android:layout_width="match_parent"
@@ -119,16 +119,19 @@
         android:textSize="18sp"
         android:textStyle="bold"
         android:gravity="center"
-        android:layout_marginTop="24dp"
+        android:background="#EEEEEE"
+        android:padding="8dp"
+        android:layout_marginTop="16dp"
         app:layout_constraintTop_toBottomOf="@id/reset_button"/>
 
-    <!-- Log table header -->
+    <!-- Log table header with background -->
     <LinearLayout
         android:id="@+id/log_table_header"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginTop="8dp"
+        android:background="#DDDDDD"
+        android:layout_marginTop="4dp"
         app:layout_constraintTop_toBottomOf="@id/log_header">
 
         <TextView
@@ -159,19 +162,26 @@
             android:padding="8dp"/>
     </LinearLayout>
 
-    <!-- ScrollView for the log entries -->
+    <!-- ScrollView for the log entries with fixed height -->
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="8dp"
+        android:minHeight="200dp"
+        android:background="#F8F8F8"
+        android:padding="4dp"
         app:layout_constraintTop_toBottomOf="@id/log_table_header"
-        app:layout_constraintBottom_toBottomOf="parent">
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintVertical_bias="0.0">
 
         <LinearLayout
             android:id="@+id/log_entries_container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"/>
+            android:orientation="vertical"
+            android:divider="@android:drawable/divider_horizontal_bright"
+            android:showDividers="middle"/>
     </ScrollView>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

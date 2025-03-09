@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Gravity
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -27,6 +28,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import android.widget.ScrollView
 import android.content.Context.RECEIVER_NOT_EXPORTED
 
 class MainActivity : AppCompatActivity() {
@@ -42,6 +44,7 @@ class MainActivity : AppCompatActivity() {
     // For tracking connection time
     private var connectionStartTime: Long = 0
     private var currentRowView: LinearLayout? = null
+    private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     // Add handler for active UI updates
     private val timerHandler = Handler(Looper.getMainLooper())
@@ -99,6 +102,12 @@ class MainActivity : AppCompatActivity() {
         timerUpdateReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 if (intent.action == "com.example.wifitimerilu.TIMER_UPDATE") {
+                    // Log all extras for debugging
+                    val extras = intent.extras
+                    if (extras != null) {
+                        Log.d(TAG, "Received broadcast with extras: ${extras.keySet().joinToString()}")
+                    }
+
                     // Force immediate UI refresh
                     updateUIFromPreferences()
 
@@ -109,6 +118,8 @@ class MainActivity : AppCompatActivity() {
                     // Check for explicit connection events
                     val connectionStarted = intent.getBooleanExtra("connection_started", false)
                     val connectionEnded = intent.getBooleanExtra("connection_ended", false)
+
+                    Log.d(TAG, "Received broadcast - connectionStarted: $connectionStarted, connectionEnded: $connectionEnded, isRunning: $isRunning")
 
                     if (connectionStarted) {
                         // A new connection has started
@@ -131,17 +142,8 @@ class MainActivity : AppCompatActivity() {
 
                         Log.d(TAG, "Connection details - start: $connectionStartTime, end: $connectionEndTime, duration: ${connectionDuration/1000}s")
 
-                        // Update the log entry if duration is at least one minute
-                        if (connectionDuration >= 60000) {
-                            updateConnectionEndTime(connectionEndTime)
-                        } else {
-                            // Remove the log entry if duration is less than one minute
-                            Log.d(TAG, "Connection duration < 1 minute, removing entry")
-                            if (currentRowView != null) {
-                                logEntriesContainer.removeView(currentRowView)
-                                currentRowView = null
-                            }
-                        }
+                        // Update the log entry - removed the 1-minute limitation
+                        updateConnectionEndTime(connectionEndTime)
                     } else {
                         // Regular update, just update the status
                         if (isRunning) {
@@ -154,7 +156,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-
     override fun onResume() {
         super.onResume()
 
@@ -171,6 +172,14 @@ class MainActivity : AppCompatActivity() {
 
         // Force an immediate update
         updateUIFromPreferences()
+
+        // Add a test entry to see if the log container is working
+        addTestLogEntry()
+
+        // Check if log container is visible and has correct layout
+        Log.d(TAG, "Log container is visible: ${logEntriesContainer.visibility == View.VISIBLE}")
+        Log.d(TAG, "Log container width: ${logEntriesContainer.width}, height: ${logEntriesContainer.height}")
+        Log.d(TAG, "Log container parent is ScrollView: ${logEntriesContainer.parent is ScrollView}")
     }
 
     override fun onPause() {
@@ -206,6 +215,8 @@ class MainActivity : AppCompatActivity() {
         if (!logEntries.isNullOrEmpty()) {
             try {
                 val entries = logEntries.split("|")
+                Log.d(TAG, "Loading ${entries.size} saved log entries")
+
                 for (entry in entries) {
                     val parts = entry.split(",")
                     if (parts.size == 3) {
@@ -218,13 +229,16 @@ class MainActivity : AppCompatActivity() {
                             continue
                         }
 
+                        Log.d(TAG, "Loading log entry: $startTime to $endTime, duration: $duration")
                         // Create and add the log entry row
                         addLogEntryRow(startTime, endTime, duration)
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading log entries: ${e.message}")
+                Log.e(TAG, "Error loading log entries: ${e.message}", e)
             }
+        } else {
+            Log.d(TAG, "No saved log entries found")
         }
     }
 
@@ -423,7 +437,6 @@ class MainActivity : AppCompatActivity() {
     // Connection log management methods
     private fun addNewConnectionToLog() {
         connectionStartTime = System.currentTimeMillis()
-        val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
         val startTimeStr = timeFormat.format(Date(connectionStartTime))
 
         Log.d(TAG, "Adding new connection to log at time: $startTimeStr")
@@ -435,6 +448,9 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         )
+
+        // Set a background color to make it visible
+        row.setBackgroundColor(ContextCompat.getColor(this, R.color.purple_200))
 
         // "In" column
         val inColumn = TextView(this)
@@ -471,6 +487,62 @@ class MainActivity : AppCompatActivity() {
             logEntriesContainer.addView(row, 0) // Add at the top
             currentRowView = row
             Log.d(TAG, "New row added to log container with 'In' time: $startTimeStr")
+
+            // Debug info
+            Toast.makeText(this, "Added connection entry at $startTimeStr", Toast.LENGTH_SHORT).show()
+            Log.d(TAG, "Log container child count: ${logEntriesContainer.childCount}")
+        }
+    }
+
+    // Add test entry for debugging with proper column format
+    private fun addTestLogEntry() {
+        runOnUiThread {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            row.setBackgroundColor(ContextCompat.getColor(this, R.color.teal_200))
+
+            // Current time for the test
+            val currentTime = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
+            // In column
+            val inColumn = TextView(this)
+            inColumn.layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f
+            )
+            inColumn.text = currentTime
+            inColumn.gravity = Gravity.CENTER
+            inColumn.setPadding(8, 8, 8, 8)
+            row.addView(inColumn)
+
+            // Out column
+            val outColumn = TextView(this)
+            outColumn.layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f
+            )
+            outColumn.text = "TEST"
+            outColumn.gravity = Gravity.CENTER
+            outColumn.setPadding(8, 8, 8, 8)
+            row.addView(outColumn)
+
+            // Duration column
+            val durationColumn = TextView(this)
+            durationColumn.layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f
+            )
+            durationColumn.text = "TEST"
+            durationColumn.gravity = Gravity.CENTER
+            durationColumn.setPadding(8, 8, 8, 8)
+            row.addView(durationColumn)
+
+            // Add the row to the container
+            logEntriesContainer.addView(row, 0)
+
+            Log.d(TAG, "Added TEST entry to log container with proper columns")
+            Toast.makeText(this, "Added TEST entry", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -482,46 +554,43 @@ class MainActivity : AppCompatActivity() {
 
         Log.d(TAG, "Updating connection end time. Start: $connectionStartTime, End: $connectionEndTime")
 
-        val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
         val endTimeStr = timeFormat.format(Date(connectionEndTime))
 
         // Calculate duration
         val durationMillis = connectionEndTime - connectionStartTime
 
-        // Skip if less than one minute
-        if (durationMillis < 60000) {
-            // Remove the current row if duration is less than one minute
-            Log.d(TAG, "Duration < 1 minute (${durationMillis/1000}s), removing row")
-            runOnUiThread {
-                logEntriesContainer.removeView(currentRowView)
-                currentRowView = null
-            }
-            return
-        }
-
-        // Format duration (HH:mm)
+        // Format duration (HH:mm:ss) - removed the 1-minute limitation
         val hours = TimeUnit.MILLISECONDS.toHours(durationMillis)
         val minutes = TimeUnit.MILLISECONDS.toMinutes(durationMillis) % 60
-        val durationStr = String.format("%02d:%02d", hours, minutes)
+        val seconds = TimeUnit.MILLISECONDS.toSeconds(durationMillis) % 60
+        val durationStr = String.format("%02d:%02d:%02d", hours, minutes, seconds)
 
         Log.d(TAG, "Updating log entry: Out=$endTimeStr, Duration=$durationStr")
 
         // Update the "Out" and "Duration" columns
         runOnUiThread {
-            val outColumn = currentRowView!!.getChildAt(1) as TextView
-            outColumn.text = endTimeStr
+            try {
+                val outColumn = currentRowView!!.getChildAt(1) as TextView
+                outColumn.text = endTimeStr
 
-            val durationColumn = currentRowView!!.getChildAt(2) as TextView
-            durationColumn.text = durationStr
+                val durationColumn = currentRowView!!.getChildAt(2) as TextView
+                durationColumn.text = durationStr
 
-            // Save the log entry
-            saveLogEntry(
-                timeFormat.format(Date(connectionStartTime)),
-                endTimeStr,
-                durationStr
-            )
+                // Save the log entry
+                saveLogEntry(
+                    timeFormat.format(Date(connectionStartTime)),
+                    endTimeStr,
+                    durationStr
+                )
 
-            currentRowView = null
+                Toast.makeText(this, "Updated connection log with end time", Toast.LENGTH_SHORT).show()
+
+                // Set currentRowView to null to indicate this entry is complete
+                currentRowView = null
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating log entry: ${e.message}", e)
+                Toast.makeText(this, "Error updating log: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -533,6 +602,9 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         )
+
+        // Set background color for visibility during debugging
+        row.setBackgroundColor(ContextCompat.getColor(this, R.color.purple_500))
 
         // "In" column
         val inColumn = TextView(this)
@@ -567,6 +639,7 @@ class MainActivity : AppCompatActivity() {
         // Add the row to the container
         runOnUiThread {
             logEntriesContainer.addView(row, 0) // Add at the top
+            Log.d(TAG, "Added saved log entry: $startTime to $endTime, duration: $duration")
         }
     }
 

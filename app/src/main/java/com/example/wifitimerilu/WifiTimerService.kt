@@ -102,6 +102,10 @@ class WifiTimerService : Service() {
                 intent.putExtra("is_running", isTimerRunning)
                 intent.putExtra("was_running", wasTimerRunning)
                 intent.putExtra("current_time", formattedTime)
+
+                // Add package name for safety
+                intent.setPackage(applicationContext.packageName)
+
                 sendBroadcast(intent)
 
                 timerHandler.postDelayed(this, 1000) // Update every second
@@ -304,9 +308,12 @@ class WifiTimerService : Service() {
                 Log.d(TAG, "Available networks: $networkNames")
             }
 
-            // Check if target network is available
-            val isTargetAvailable = scanResults.any { it.SSID == targetWifiName }
-            Log.d(TAG, "Target network available: $isTargetAvailable, Timer running: $isTimerRunning")
+            // Check if target network is available (case-insensitive for better matching)
+            val isTargetAvailable = scanResults.any {
+                it.SSID.equals(targetWifiName, ignoreCase = true)
+            }
+
+            Log.d(TAG, "Target network '$targetWifiName' available: $isTargetAvailable, Timer running: $isTimerRunning")
 
             // Start timer if target found and not already running
             if (isTargetAvailable && !isTimerRunning) {
@@ -318,6 +325,9 @@ class WifiTimerService : Service() {
                 Log.d(TAG, "STOPPING TIMER - network no longer available: $targetWifiName")
                 stopTimer()
             }
+
+            // Always send a broadcast with current state (for debugging)
+            broadcastTimerUpdate()
 
         } catch (e: Exception) {
             Log.e(TAG, "Error checking WiFi networks", e)
@@ -346,7 +356,22 @@ class WifiTimerService : Service() {
         intent.putExtra("current_time", formatTime(totalTimeMillis))
         intent.putExtra("connection_started", true)
         intent.putExtra("connection_time", connectionStartTimeForLog)
+
+        // Explicitly add package name for the broadcast - safer approach
+        intent.setPackage(applicationContext.packageName)
+
         sendBroadcast(intent)
+
+        // Force a broadcast with a short delay to ensure it's received
+        Handler(Looper.getMainLooper()).postDelayed({
+            val retryIntent = Intent("com.example.wifitimerilu.TIMER_UPDATE")
+            retryIntent.putExtra("connection_started", true)
+            retryIntent.putExtra("connection_time", connectionStartTimeForLog)
+            retryIntent.putExtra("is_running", true)
+            retryIntent.setPackage(applicationContext.packageName)
+            sendBroadcast(retryIntent)
+            Log.d(TAG, "Sent retry connection_started broadcast")
+        }, 1000)
 
         Log.d(TAG, "Timer started - broadcasting connection_started=true with time: $connectionStartTimeForLog")
     }
@@ -378,7 +403,27 @@ class WifiTimerService : Service() {
         intent.putExtra("connection_start_time", connectionStartTimeForLog)
         intent.putExtra("connection_end_time", endTimeMillis)
         intent.putExtra("connection_duration", sessionTimeMillis)
+
+        // Add package name for safety
+        intent.setPackage(applicationContext.packageName)
+
         sendBroadcast(intent)
+
+        // Send direct multiple broadcasts to ensure they are received
+        // Send direct multiple broadcasts to ensure they are received
+        for (i in 0..2) {
+            Handler(Looper.getMainLooper()).postDelayed({
+                val retryIntent = Intent("com.example.wifitimerilu.TIMER_UPDATE")
+                retryIntent.putExtra("connection_ended", true)
+                retryIntent.putExtra("connection_start_time", connectionStartTimeForLog)
+                retryIntent.putExtra("connection_end_time", endTimeMillis)
+                retryIntent.putExtra("connection_duration", sessionTimeMillis)
+                retryIntent.putExtra("is_running", false)
+                retryIntent.setPackage(applicationContext.packageName)
+                sendBroadcast(retryIntent)
+                Log.d(TAG, "Sent retry connection_ended broadcast #${i+1}")
+            }, 500L * (i + 1))  // Add 'L' to make it explicitly a Long
+        }
 
         Log.d(TAG, "Timer stopped - broadcasting connection_ended=true with duration: ${sessionTimeMillis/1000} seconds")
     }
@@ -422,6 +467,10 @@ class WifiTimerService : Service() {
         intent.putExtra("is_running", isTimerRunning)
         intent.putExtra("was_running", wasTimerRunning) // Add the previous state
         intent.putExtra("current_time", formatTime(totalTimeMillis))
+
+        // Add package name for safety
+        intent.setPackage(applicationContext.packageName)
+
         sendBroadcast(intent)
         Log.d(TAG, "Broadcast sent: isRunning=$isTimerRunning, wasRunning=$wasTimerRunning, time=${formatTime(totalTimeMillis)}")
     }
