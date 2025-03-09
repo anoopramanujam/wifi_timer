@@ -59,6 +59,19 @@ class WifiTimerService : Service() {
                 val formattedTime = formatTime(currentTotalTime)
                 updateNotification("Timer running: $formattedTime")
 
+                // IMPORTANT: Save the current session time to preferences
+                preferences.edit().apply {
+                    putLong("current_session_time", sessionTimeMillis)
+                    apply()
+                }
+
+                // Broadcast timer update every second
+                val intent = Intent("com.example.wifitimerilu.TIMER_UPDATE")
+                intent.putExtra("total_time", currentTotalTime)
+                intent.putExtra("is_running", isTimerRunning)
+                intent.putExtra("current_time", formattedTime)
+                sendBroadcast(intent)
+
                 timerHandler.postDelayed(this, 1000) // Update every second
             }
         }
@@ -96,6 +109,9 @@ class WifiTimerService : Service() {
         // Load saved timer value
         totalTimeMillis = preferences.getLong("total_time", 0)
         Log.d(TAG, "Loaded saved time: ${formatTime(totalTimeMillis)}")
+
+        // Clear any existing session time
+        preferences.edit().putLong("current_session_time", 0).apply()
 
         // Register for WiFi scan results
         val intentFilter = IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
@@ -153,9 +169,10 @@ class WifiTimerService : Service() {
             totalTimeMillis += sessionTimeMillis
         }
 
-        // Save total time
+        // Save total time and clear session time
         preferences.edit().apply {
             putLong("total_time", totalTimeMillis)
+            putLong("current_session_time", 0) // Clear session time on destroy
             apply()
         }
 
@@ -233,6 +250,12 @@ class WifiTimerService : Service() {
         isTimerRunning = true
         timerHandler.post(timerRunnable)
         updateNotification("Timer started")
+
+        // Reset current session time when starting
+        preferences.edit().putLong("current_session_time", 0).apply()
+
+        // Broadcast timer state change
+        broadcastTimerUpdate()
     }
 
     private fun stopTimer() {
@@ -241,15 +264,29 @@ class WifiTimerService : Service() {
         val sessionTimeMillis = endTimeMillis - startTimeMillis
         totalTimeMillis += sessionTimeMillis
 
-        // Save total time
+        // Save total time and reset session time
         preferences.edit().apply {
             putLong("total_time", totalTimeMillis)
+            putLong("current_session_time", 0) // Clear session time when timer stops
             apply()
         }
 
         isTimerRunning = false
         timerHandler.removeCallbacks(timerRunnable)
         updateNotification("Timer stopped - Total: ${formatTime(totalTimeMillis)}")
+
+        // Broadcast timer state change
+        broadcastTimerUpdate()
+    }
+
+    private fun broadcastTimerUpdate() {
+        // Send broadcast to update UI
+        val intent = Intent("com.example.wifitimerilu.TIMER_UPDATE")
+        intent.putExtra("total_time", totalTimeMillis)
+        intent.putExtra("is_running", isTimerRunning)
+        intent.putExtra("current_time", formatTime(totalTimeMillis))
+        sendBroadcast(intent)
+        Log.d(TAG, "Broadcast sent: isRunning=$isTimerRunning, time=${formatTime(totalTimeMillis)}")
     }
 
     private fun formatTime(timeMillis: Long): String {

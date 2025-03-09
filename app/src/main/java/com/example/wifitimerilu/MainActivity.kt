@@ -1,11 +1,17 @@
 package com.example.wifitimerilu
 
 import android.Manifest
+import android.app.ActivityManager
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.widget.Button
 import android.widget.EditText
@@ -15,6 +21,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import java.util.concurrent.TimeUnit
+import android.content.Context.RECEIVER_NOT_EXPORTED
 
 class MainActivity : AppCompatActivity() {
     private lateinit var wifiNameEditText: EditText
@@ -23,6 +30,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var statusTextView: TextView
     private lateinit var resetButton: Button
     private lateinit var preferences: SharedPreferences
+    private lateinit var timerUpdateReceiver: BroadcastReceiver
+
+    // Add handler for active UI updates
+    private val timerHandler = Handler(Looper.getMainLooper())
+    private val timerUpdateRunnable = object : Runnable {
+        override fun run() {
+            updateUIFromPreferences()
+            // Run this every 500ms to ensure UI is always up-to-date
+            timerHandler.postDelayed(this, 500)
+        }
+    }
 
     companion object {
         private const val TAG = "WifiTimerMain"
@@ -55,19 +73,71 @@ class MainActivity : AppCompatActivity() {
             resetTimer()
         }
 
+        // Initialize the broadcast receiver
+        initTimerUpdateReceiver()
+
         // Request necessary permissions
         requestRequiredPermissions()
     }
 
+    private fun initTimerUpdateReceiver() {
+        timerUpdateReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == "com.example.wifitimerilu.TIMER_UPDATE") {
+                    // Force immediate UI refresh
+                    updateUIFromPreferences()
+
+                    // Get state information for status updates
+                    val isRunning = intent.getBooleanExtra("is_running", false)
+                    val wifiName = preferences.getString("wifi_name", "") ?: ""
+
+                    // Update status based on timer state
+                    if (isRunning) {
+                        updateStatus("Connected to: $wifiName")
+                    } else {
+                        updateStatus("Waiting for: $wifiName")
+                    }
+
+                    Log.d(TAG, "Received broadcast update, isRunning: $isRunning")
+                }
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
-        // Update timer display with latest value
-        updateTimerDisplay()
+
+        // Start periodic UI updates
+        timerHandler.post(timerUpdateRunnable)
+
+        // Register for timer updates
+        val intentFilter = IntentFilter("com.example.wifitimerilu.TIMER_UPDATE")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(timerUpdateReceiver, intentFilter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(timerUpdateReceiver, intentFilter)
+        }
+
+        // Force an immediate update
+        updateUIFromPreferences()
+    }
+
+    override fun onPause() {
+        super.onPause()
+
+        // Remove the timer update handler
+        timerHandler.removeCallbacks(timerUpdateRunnable)
+
+        // Unregister receiver when activity is not visible
+        try {
+            unregisterReceiver(timerUpdateReceiver)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error unregistering receiver", e)
+        }
     }
 
     private fun loadSavedData() {
         val savedWifiName = preferences.getString("wifi_name", "")
-        val totalTimeMillis = preferences.getLong("total_time", 0)
 
         // Display saved WiFi name if exists
         if (!savedWifiName.isNullOrEmpty()) {
@@ -75,18 +145,40 @@ class MainActivity : AppCompatActivity() {
             updateStatus("Monitoring for: $savedWifiName")
         }
 
-        // Display saved timer value
-        updateTimerDisplay()
+        // Initial UI update
+        updateUIFromPreferences()
     }
 
-    private fun updateTimerDisplay() {
+    private fun updateUIFromPreferences() {
+        // Get the total saved time
         val totalTimeMillis = preferences.getLong("total_time", 0)
-        val hours = TimeUnit.MILLISECONDS.toHours(totalTimeMillis)
-        val minutes = TimeUnit.MILLISECONDS.toMinutes(totalTimeMillis) % 60
-        val seconds = TimeUnit.MILLISECONDS.toSeconds(totalTimeMillis) % 60
+
+        // If timer is running, add the current session time
+        val currentSessionTime = preferences.getLong("current_session_time", 0)
+        val isServiceRunning = isServiceRunning(WifiTimerService::class.java)
+
+        // Only add session time if service is running
+        val displayTime = if (isServiceRunning) totalTimeMillis + currentSessionTime else totalTimeMillis
+
+        // Format and display the time
+        val hours = TimeUnit.MILLISECONDS.toHours(displayTime)
+        val minutes = TimeUnit.MILLISECONDS.toMinutes(displayTime) % 60
+        val seconds = TimeUnit.MILLISECONDS.toSeconds(displayTime) % 60
 
         val timeFormatted = String.format("%02d:%02d:%02d", hours, minutes, seconds)
         timerTextView.text = timeFormatted
+
+        Log.d(TAG, "Updated UI with time: $timeFormatted (base: $totalTimeMillis, session: $currentSessionTime)")
+    }
+
+    private fun isServiceRunning(serviceClass: Class<*>): Boolean {
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        for (service in activityManager.getRunningServices(Integer.MAX_VALUE)) {
+            if (serviceClass.name == service.service.className) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun saveWifiName() {
@@ -114,10 +206,11 @@ class MainActivity : AppCompatActivity() {
         // Reset timer to zero
         preferences.edit().apply {
             putLong("total_time", 0)
+            putLong("current_session_time", 0)
             apply()
         }
 
-        updateTimerDisplay()
+        updateUIFromPreferences()
         Toast.makeText(this, "Timer reset to 00:00:00", Toast.LENGTH_SHORT).show()
     }
 
