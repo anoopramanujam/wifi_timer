@@ -32,6 +32,8 @@ class WifiTimerService : Service() {
     private var startTimeMillis: Long = 0
     private var totalTimeMillis: Long = 0
     private var isTimerRunning: Boolean = false
+    private var wasTimerRunning: Boolean = false
+    private var connectionStartTimeForLog: Long = 0
 
     // Broadcast receiver for WiFi scan results
     private val wifiScanReceiver = object : BroadcastReceiver() {
@@ -44,6 +46,27 @@ class WifiTimerService : Service() {
             } else {
                 // Even if system reports failure, try to check anyway
                 checkForTargetNetwork()
+            }
+        }
+    }
+
+    // Broadcast receiver for WiFi state changes
+    private val wifiStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                WifiManager.WIFI_STATE_CHANGED_ACTION -> {
+                    val wifiState = intent.getIntExtra(WifiManager.EXTRA_WIFI_STATE, WifiManager.WIFI_STATE_UNKNOWN)
+                    Log.d(TAG, "WiFi state changed to: $wifiState")
+
+                    // If WiFi is disabled and timer is running, stop the timer
+                    if (wifiState == WifiManager.WIFI_STATE_DISABLED && isTimerRunning) {
+                        Log.d(TAG, "WiFi disabled, stopping timer")
+                        stopTimer()
+                    }
+
+                    // Always trigger a network check when WiFi state changes
+                    checkForTargetNetwork()
+                }
             }
         }
     }
@@ -77,6 +100,7 @@ class WifiTimerService : Service() {
                 val intent = Intent("com.example.wifitimerilu.TIMER_UPDATE")
                 intent.putExtra("total_time", currentTotalTime)
                 intent.putExtra("is_running", isTimerRunning)
+                intent.putExtra("was_running", wasTimerRunning)
                 intent.putExtra("current_time", formattedTime)
                 sendBroadcast(intent)
 
@@ -137,6 +161,9 @@ class WifiTimerService : Service() {
             registerReceiver(resetReceiver, resetIntentFilter)
         }
 
+        // Register for WiFi state changes
+        registerWifiStateReceiver()
+
         // Acquire wake lock
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(
@@ -149,6 +176,16 @@ class WifiTimerService : Service() {
         handler.post(scanRunnable)
 
         Log.d(TAG, "Service created successfully")
+    }
+
+    private fun registerWifiStateReceiver() {
+        val wifiStateFilter = IntentFilter(WifiManager.WIFI_STATE_CHANGED_ACTION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(wifiStateReceiver, wifiStateFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(wifiStateReceiver, wifiStateFilter)
+        }
+        Log.d(TAG, "WiFi state receiver registered")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -207,6 +244,7 @@ class WifiTimerService : Service() {
         try {
             unregisterReceiver(wifiScanReceiver)
             unregisterReceiver(resetReceiver)
+            unregisterReceiver(wifiStateReceiver)
         } catch (e: Exception) {
             Log.e(TAG, "Error unregistering receiver", e)
         }
@@ -241,6 +279,19 @@ class WifiTimerService : Service() {
             return
         }
 
+        // Save current state before we potentially change it
+        wasTimerRunning = isTimerRunning
+
+        // Check if WiFi is enabled, if not stop the timer
+        if (!wifiManager.isWifiEnabled) {
+            Log.d(TAG, "WiFi is disabled, stopping timer if running")
+            if (isTimerRunning) {
+                stopTimer()
+            }
+            updateNotification("WiFi is disabled")
+            return
+        }
+
         Log.d(TAG, "Checking for target network: $targetWifiName")
 
         try {
@@ -270,11 +321,16 @@ class WifiTimerService : Service() {
 
         } catch (e: Exception) {
             Log.e(TAG, "Error checking WiFi networks", e)
+            // On error, we should stop the timer to be safe
+            if (isTimerRunning) {
+                stopTimer()
+            }
         }
     }
 
     private fun startTimer() {
         startTimeMillis = System.currentTimeMillis()
+        connectionStartTimeForLog = startTimeMillis // Save this for logging
         isTimerRunning = true
         timerHandler.post(timerRunnable)
         updateNotification("Timer started")
@@ -282,8 +338,17 @@ class WifiTimerService : Service() {
         // Reset current session time when starting
         preferences.edit().putLong("current_session_time", 0).apply()
 
-        // Broadcast timer state change
-        broadcastTimerUpdate()
+        // Broadcast timer state change with explicit connection info
+        val intent = Intent("com.example.wifitimerilu.TIMER_UPDATE")
+        intent.putExtra("total_time", totalTimeMillis)
+        intent.putExtra("is_running", true)
+        intent.putExtra("was_running", false)
+        intent.putExtra("current_time", formatTime(totalTimeMillis))
+        intent.putExtra("connection_started", true)
+        intent.putExtra("connection_time", connectionStartTimeForLog)
+        sendBroadcast(intent)
+
+        Log.d(TAG, "Timer started - broadcasting connection_started=true with time: $connectionStartTimeForLog")
     }
 
     private fun stopTimer() {
@@ -303,8 +368,19 @@ class WifiTimerService : Service() {
         timerHandler.removeCallbacks(timerRunnable)
         updateNotification("Timer stopped - Total: ${formatTime(totalTimeMillis)}")
 
-        // Broadcast timer state change
-        broadcastTimerUpdate()
+        // Broadcast timer state change with connection end info
+        val intent = Intent("com.example.wifitimerilu.TIMER_UPDATE")
+        intent.putExtra("total_time", totalTimeMillis)
+        intent.putExtra("is_running", false)
+        intent.putExtra("was_running", true)
+        intent.putExtra("current_time", formatTime(totalTimeMillis))
+        intent.putExtra("connection_ended", true)
+        intent.putExtra("connection_start_time", connectionStartTimeForLog)
+        intent.putExtra("connection_end_time", endTimeMillis)
+        intent.putExtra("connection_duration", sessionTimeMillis)
+        sendBroadcast(intent)
+
+        Log.d(TAG, "Timer stopped - broadcasting connection_ended=true with duration: ${sessionTimeMillis/1000} seconds")
     }
 
     private fun resetTimer() {
@@ -344,9 +420,10 @@ class WifiTimerService : Service() {
         val intent = Intent("com.example.wifitimerilu.TIMER_UPDATE")
         intent.putExtra("total_time", totalTimeMillis)
         intent.putExtra("is_running", isTimerRunning)
+        intent.putExtra("was_running", wasTimerRunning) // Add the previous state
         intent.putExtra("current_time", formatTime(totalTimeMillis))
         sendBroadcast(intent)
-        Log.d(TAG, "Broadcast sent: isRunning=$isTimerRunning, time=${formatTime(totalTimeMillis)}")
+        Log.d(TAG, "Broadcast sent: isRunning=$isTimerRunning, wasRunning=$wasTimerRunning, time=${formatTime(totalTimeMillis)}")
     }
 
     private fun formatTime(timeMillis: Long): String {
