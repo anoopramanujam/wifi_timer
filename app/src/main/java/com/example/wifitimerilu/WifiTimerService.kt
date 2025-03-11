@@ -23,6 +23,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
 class WifiTimerService : Service() {
@@ -32,6 +33,8 @@ class WifiTimerService : Service() {
     private lateinit var timerHandler: Handler
     private lateinit var wakeLock: PowerManager.WakeLock
     private lateinit var notificationManager: NotificationManager
+    private lateinit var dailyResetHandler: Handler
+    private lateinit var dailyResetRunnable: Runnable
 
     private var startTimeMillis: Long = 0
     private var totalTimeMillis: Long = 0
@@ -120,7 +123,11 @@ class WifiTimerService : Service() {
     // Scanner runnable to initiate scans
     private val scanRunnable = object : Runnable {
         override fun run() {
-            startWifiScan()
+            if (shouldScan()) {
+                startWifiScan()
+            } else {
+                Log.d(TAG, "Skipping scan - outside scanning hours or weekend")
+            }
             handler.postDelayed(this, SCAN_INTERVAL)
         }
     }
@@ -129,7 +136,9 @@ class WifiTimerService : Service() {
         private const val TAG = "WifiTimerService"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "WifiTimerChannel"
-        private const val SCAN_INTERVAL: Long = 10000 // Scan every 10 seconds
+        private const val SCAN_INTERVAL: Long = 30000 // Scan every 30 seconds
+        private const val SCAN_START_HOUR = 9 // 9 AM
+        private const val SCAN_END_HOUR = 21 // 9 PM
     }
 
     override fun onCreate() {
@@ -141,6 +150,7 @@ class WifiTimerService : Service() {
         preferences = getSharedPreferences("WifiTimerPrefs", Context.MODE_PRIVATE)
         handler = Handler(Looper.getMainLooper())
         timerHandler = Handler(Looper.getMainLooper())
+        dailyResetHandler = Handler(Looper.getMainLooper())
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         // Create notification channel
@@ -183,7 +193,56 @@ class WifiTimerService : Service() {
         // Start periodic scanning
         handler.post(scanRunnable)
 
+        // Schedule daily timer reset at 9 AM
+        scheduleDailyReset()
+
         Log.d(TAG, "Service created successfully")
+    }
+
+    private fun scheduleDailyReset() {
+        dailyResetRunnable = Runnable {
+            Log.d(TAG, "Executing daily timer reset at 9 AM")
+            resetTimer()
+            
+            // Schedule next day's reset
+            scheduleDailyReset()
+        }
+        
+        // Calculate time until 9 AM
+        val calendar = Calendar.getInstance()
+        val currentHour = calendar.get(Calendar.HOUR_OF_DAY)
+        val currentMinute = calendar.get(Calendar.MINUTE)
+        val currentSecond = calendar.get(Calendar.SECOND)
+        
+        // If it's already past 9 AM, schedule for tomorrow
+        if (currentHour >= SCAN_START_HOUR) {
+            calendar.add(Calendar.DAY_OF_YEAR, 1)
+        }
+        
+        // Set time to 9 AM
+        calendar.set(Calendar.HOUR_OF_DAY, SCAN_START_HOUR)
+        calendar.set(Calendar.MINUTE, 0)
+        calendar.set(Calendar.SECOND, 0)
+        
+        val now = System.currentTimeMillis()
+        val delay = calendar.timeInMillis - now
+        
+        Log.d(TAG, "Scheduling daily reset in ${delay / (1000 * 60 * 60)} hours")
+        dailyResetHandler.postDelayed(dailyResetRunnable, delay)
+    }
+    
+    private fun shouldScan(): Boolean {
+        val calendar = Calendar.getInstance()
+        val hourOfDay = calendar.get(Calendar.HOUR_OF_DAY)
+        val dayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
+        
+        // Check if it's weekend (Saturday or Sunday)
+        val isWeekend = dayOfWeek == Calendar.SATURDAY || dayOfWeek == Calendar.SUNDAY
+        
+        // Check if current time is between 9 PM and 9 AM
+        val isOutsideActiveHours = hourOfDay < SCAN_START_HOUR || hourOfDay >= SCAN_END_HOUR
+        
+        return !isWeekend && !isOutsideActiveHours
     }
 
     private fun registerWifiStateReceiver() {
@@ -233,6 +292,7 @@ class WifiTimerService : Service() {
         // Stop handlers
         handler.removeCallbacks(scanRunnable)
         timerHandler.removeCallbacks(timerRunnable)
+        dailyResetHandler.removeCallbacks(dailyResetRunnable)
 
         // If timer is running, save the time
         if (isTimerRunning) {
